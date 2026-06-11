@@ -49,6 +49,8 @@ Aggregate reports are written to `output/04_evaluation/`:
 - `cer_report.md`: aggregate comparison for reporting.
 - `cer_report.json`: complete machine-readable results.
 - `cer_per_document.csv`: per-page results for analysis and plotting.
+- `error_analysis.csv`: representative error analysis with the requested columns.
+- `ablation_report.md/json/csv`: component-contribution comparison.
 
 Every report shows both:
 
@@ -59,3 +61,18 @@ The report uses Unicode NFC so personal symbols and compatibility characters are
 not silently rewritten. It includes standard CER with internal whitespace retained
 and a whitespace-insensitive CER suitable for evaluating Chinese OCR independently
 of line-layout differences.
+
+## Error Analysis
+
+The evaluation compares human ground truth, the ensemble-only raw OCR fed to the
+correction stage, and the ensemble + LLM corrected text. It reports:
+
+| Error Type | Meaning |
+|---|---|
+| 繁簡混用 | Raw OCR becomes the ground-truth form after Taiwan Traditional conversion. |
+| 相似字誤認 | Raw OCR substituted another character or segment. |
+| 缺字 | Raw OCR omitted characters present in ground truth. |
+| LLM hallucination | Corrected text introduced content unsupported by raw OCR and inconsistent with ground truth. |
+
+Whether correction succeeded is always judged against human ground truth, never by
+the LLM itself.

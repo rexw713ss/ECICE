@@ -11,12 +11,13 @@ Input image
   +-> 01 Preprocessing
   |
   +-> 02 OCR
-  |     +-> Raw PaddleOCR baseline ---------+
-  |     +-> Multi-variant ensemble OCR -----+
-  |                                         |
-  +-> 03 LLM correction --------------------+-> 04 CER evaluation
-  |                                         |      ^
-  |                                         +------| Ground truth
+  |     +-> Raw PaddleOCR baseline ----------+
+  |     +-> Single-variant ablation OCR ------+
+  |     +-> Multi-variant ensemble OCR -------+
+  |                                          |
+  +-> 03 LLM correction ---------------------+-> 04 CER + ablation evaluation
+  |                                                  ^
+  |                                                  +--- Ground truth
   |
   +-> 05 Summary
   |
@@ -27,6 +28,13 @@ CER is an evaluation branch. It compares ground truth against the raw PaddleOCR,
 ensemble-only, and ensemble + LLM outputs. CER does not provide content to the quiz.
 The quiz is generated from the summary of the LLM-corrected text.
 
+LLM correction has two explicit layers:
+
+1. Rule-based normalization: Taiwan Traditional conversion, Unicode NFC,
+   punctuation/whitespace cleanup, and common OCR-noise replacements.
+2. Grounded LLM correction: contextual typo correction using OCR evidence, with a
+   strict policy that forbids adding information absent from the original image.
+
 ## Organized Output
 
 ```text
@@ -34,9 +42,10 @@ output/
   01_preprocessing/       Image variants and manifests
   02_ocr/
     baseline/             Raw original-image PaddleOCR
+    ablation/             Single-variant PaddleOCR predictions
     ensemble/             Multi-variant ensemble OCR
   03_llm_correction/      Corrected Traditional Chinese text
-  04_evaluation/          CER error-rate and accuracy reports
+  04_evaluation/          CER, accuracy, and error-analysis reports
   05_summary/             Page summaries
   06_quiz/                Generated quizzes
 ```
@@ -81,4 +90,5 @@ The UI reads the numbered stage folders under `output/`. For a custom output roo
 pass `--output-dir <path>`.
 
 See [CER_EVALUATION.md](CER_EVALUATION.md) for metric definitions and batch CER
-evaluation instructions.
+evaluation instructions. See [ABLATION_STUDY.md](ABLATION_STUDY.md) for the
+component-contribution experiment.

@@ -95,7 +95,18 @@ def extract_lines(result_data):
     return lines
 
 
-def run_baseline(ocr_engine, image_path, output_dir, *, lang, device):
+def run_baseline(
+    ocr_engine,
+    image_path,
+    output_dir,
+    *,
+    lang,
+    device,
+    output_stem=None,
+    output_suffix="_paddleocr_baseline",
+    method="single_pass_paddleocr_original_image",
+    setting=None,
+):
     image_path = Path(image_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -111,9 +122,9 @@ def run_baseline(ocr_engine, image_path, output_dir, *, lang, device):
         )
     lines = extract_lines(result_to_data(predictions[0]))
 
-    stem = image_path.stem
-    text_path = output_dir / f"{stem}_paddleocr_baseline.txt"
-    json_path = output_dir / f"{stem}_paddleocr_baseline.json"
+    stem = output_stem or image_path.stem
+    text_path = output_dir / f"{stem}{output_suffix}.txt"
+    json_path = output_dir / f"{stem}{output_suffix}.json"
     text_path.write_text(
         "".join(f"{line['text']}\n" for line in lines),
         encoding="utf-8",
@@ -121,7 +132,8 @@ def run_baseline(ocr_engine, image_path, output_dir, *, lang, device):
     json_path.write_text(
         json.dumps(
             {
-                "method": "single_pass_paddleocr_original_image",
+                "method": method,
+                **({"setting": setting} if setting is not None else {}),
                 "input_path": str(image_path),
                 "settings": {
                     "lang": lang,

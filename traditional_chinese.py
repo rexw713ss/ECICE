@@ -11,6 +11,12 @@ TRADITIONAL_CHINESE_INSTRUCTION = (
     "若無法確定，必須原樣保留，禁止臆測。數學符號、箭頭、編號、英數字與公式原樣保留。"
 )
 
+GROUNDED_CORRECTION_INSTRUCTION = (
+    "\n只能根據原始 OCR、同區域候選文字與原文上下文做保守校正。"
+    "不得補充、推論或新增原圖與 OCR 證據中不存在的事實、例子、法條、句子或段落。"
+    "無法確定時必須原樣保留，禁止臆測或新增待核對標記。"
+)
+
 
 @lru_cache(maxsize=1)
 def traditional_converter():

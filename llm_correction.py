@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pipeline_paths import ENSEMBLE_OCR_DIR, LLM_CORRECTION_DIR
 from traditional_chinese import (
+    GROUNDED_CORRECTION_INSTRUCTION,
     TRADITIONAL_CHINESE_INSTRUCTION,
     to_traditional_chinese,
 )
@@ -22,6 +23,17 @@ DEFAULT_LOCAL_MODEL = "gemma4:latest"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_NUM_PREDICT = 8192
 
+RULE_BASED_NORMALIZATION_STEPS = (
+    "Unicode NFC normalization",
+    "Punctuation and whitespace normalization",
+    "Common OCR noise replacements",
+    "Taiwan Traditional Chinese conversion (OpenCC s2twp)",
+)
+LLM_CORRECTION_POLICY = (
+    "Contextual typo correction grounded in OCR evidence; "
+    "must not add information absent from the original image."
+)
+
 
 def default_corrected_path(input_path):
     input_path = Path(input_path)
@@ -33,9 +45,11 @@ def default_corrected_path(input_path):
 
 def normalize_ocr_noise(text):
     text = unicodedata.normalize("NFC", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\ufeff", "")
     text = text.replace("\u200b", "")
-    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r" *([,.;:!?，。；：！？、]) *", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
 
@@ -63,47 +77,8 @@ def normalize_ocr_noise(text):
 
 
 def finalize_legal_text(text):
-    replacements = {
-        "公然且乘人不抗拒": "公然且乘人不及抗拒",
-        "使受害人不抗拒": "使受害人不及抗拒",
-        "盜竊": "竊盜",
-        "只要行為人持有而為所有": "只要行為人易持有為所有",
-        "靠背信化理論確認與背信行為在意義上的違背": (
-            "違背信託理論認為背信行為本質在於違背信託"
-        ),
-        "本人委任之外部事務": "本人與第三人間的外部事務",
-        "亦包含行為人與本人間之內部事宜均包含在內": (
-            "亦包含行為人與本人間的內部事務，且不論法律或事實上的事務均包含在內"
-        ),
-        "且必須限於財產之事務為限": "且必須限於財產事務",
-        (
-            "濫用權限為背信本質，認為在於權限之濫用，所謂為他人處理事務，"
-            "必須限於財產之事務，且必須限於法律事務，且必須限處理本人與他人"
-            "之間之外部事務者始足當之。"
-        ): (
-            "濫用權限理論認為背信行為本質在於權限濫用。所謂為他人處理事務，"
-            "必須限於法律事務，且必須限縮為處理本人與第三人間之外部事務者始足當之。"
-        ),
-        "三要素（擄行人、人質、付贖金）": (
-            "三面關係（行為人、人質、付贖金者）"
-        ),
-        "擄行人、人質、付贖金三要素": "行為人、人質、付贖金者三面關係",
-        (
-            "4. 未得他人同意而將其置於實力支配下的擄人行為，"
-            "惟有爭議該罪成立是否要求具備三面關係"
-        ): (
-            "4. 擄人勒贖罪：未得他人同意而將其置於實力支配下，"
-            "其成立是否要求具備三面關係"
-        ),
-        "原則以客觀，例外以主觀為通常標準": "原則採客觀標準，例外採主觀標準",
-        "詐欺：施用術": "詐欺：施用詐術",
-        "  ロ 實務認為": "  (1) 實務認為",
-        "  ヮ 有見解認為": "  (2) 有見解認為",
-    }
-    for wrong, right in replacements.items():
-        text = text.replace(wrong, right)
-    text = re.sub(r"限於([^，。\n]+)為限", r"限於\1", text)
-    return to_traditional_chinese(text.strip())
+    """Apply only deterministic normalization after LLM correction."""
+    return normalize_ocr_noise(text)
 
 
 def split_text(text, max_chars=1000):
@@ -196,14 +171,13 @@ def build_ocr_evidence_chunks(ocr_json_path, max_chars=3000, max_alternatives=3)
 def build_correction_messages(chunk, chunk_index, chunk_count):
     system_prompt = (
         "你是熟悉臺灣刑法與財產犯罪的繁體中文課堂筆記 OCR 校對助手。"
-        "這是一份關於【刑法與財產犯罪】（如搶奪、侵占、背信、強盜、詐欺）的專業法律筆記。" 
+        "這是一份關於刑法與財產犯罪的專業法律筆記。"
         "任務是修正 OCR 錯字、漏字、簡繁混雜、標點與斷行問題。"
-        "若輸入提供同一區域的多個 OCR 候選，請綜合候選、信心分數與法律語境，選擇最合理文字。"
-        "遇到明顯缺字時，可依上下文與常見法律術語補回，例如：行為人、實務認為、學說認為、"
-        "乘人不及抗拒、合法持有、為他人處理事務、濫用權限、保證人地位、財產處分、脅迫。"
+        "若輸入提供同一區域的多個 OCR 候選，請綜合候選、信心分數與原文上下文，選擇最合理文字。"
+        "只有 OCR 候選或可辨識上下文明確支持時，才可修復缺字。"
         "請保留原本的意思、編號（如 1., (1), (2)）、條列層次與專有名詞；"
-        "可潤飾成完整通順句子，但不得增加原筆記未討論的新爭點、法條或結論。"
-        "若無法從候選與語境合理重建，請標示「【待核對：原候選】」。"
+        "不得為了通順而新增資訊，也不得增加原筆記未出現的新爭點、法條或結論。"
+        "若無法從候選與原文上下文可靠校正，必須原樣保留。"
         "每個區域最多輸出一行，只輸出校正後文字。"
     )
     user_prompt = (
@@ -221,12 +195,10 @@ def build_reconstruction_messages(text):
     system_prompt = (
         "你是熟悉臺灣刑法的繁體中文法律筆記編輯。"
         "請對 OCR 初步校正文進行第二階段全文重建："
-        "修復殘留錯字、漏字、斷句、編號與不完整句子，使內容可直接作為考前複習資料。"
-        "你可以依全文上下文與標準法律術語補回高度可推定的缺字，但不得新增筆記未討論的新知識。"
-        "特別檢查搶奪、侵占、背信、擄人勒贖、強盜、詐欺、收費設備詐欺等術語。"
-        "應保留實務與學說的對立見解、法條號碼及因果流程。"
-        "刪除 Date、NO.、無意義孤立字與明顯 OCR 雜訊。"
-        "無法可靠重建的句子請保留並標成「【待核對：...】」。"
+        "保守修復殘留錯字、斷句與編號。"
+        "只能使用輸入文字已有的內容，不得依常識或專業知識補寫缺字、法條、例子或結論。"
+        "不得刪除可能屬於原圖內容的 Date、NO.、特殊符號、孤立字或片段。"
+        "無法可靠重建的句子必須原樣保留，不得新增說明標記。"
         "不得摘要、不得省略任何可辨識的筆記重點，只輸出重建後完整筆記。"
     )
     return [
@@ -337,20 +309,24 @@ def chat_completion(
     model=None,
     base_url=None,
     timeout=90,
+    grounded_correction=False,
 ):
     messages = [dict(message) for message in messages]
+    shared_instruction = TRADITIONAL_CHINESE_INSTRUCTION
+    if grounded_correction:
+        shared_instruction += GROUNDED_CORRECTION_INSTRUCTION
     instruction_added = False
     for message in messages:
         if message.get("role") == "system":
             message["content"] = (
-                str(message.get("content", "")) + TRADITIONAL_CHINESE_INSTRUCTION
+                str(message.get("content", "")) + shared_instruction
             )
             instruction_added = True
             break
     if not instruction_added:
         messages.insert(
             0,
-            {"role": "system", "content": TRADITIONAL_CHINESE_INSTRUCTION.strip()},
+            {"role": "system", "content": shared_instruction.strip()},
         )
 
     provider = (
@@ -398,6 +374,24 @@ def correct_text(
         "corrected_text": normalized,
         "output_script": "Traditional Chinese (Taiwan)",
         "chunks": [],
+        "correction_pipeline": {
+            "rule_based_normalization": {
+                "applied": True,
+                "steps": list(RULE_BASED_NORMALIZATION_STEPS),
+                "input_length": len(text),
+                "output_length": len(normalized),
+            },
+            "llm_based_correction": {
+                "applied": False,
+                "policy": LLM_CORRECTION_POLICY,
+                "grounded_no_new_information": True,
+                "grounding_sources": [
+                    "primary OCR text",
+                    "same-region OCR alternatives when available",
+                    "document context",
+                ],
+            },
+        },
     }
     if not use_llm:
         return result
@@ -425,6 +419,7 @@ def correct_text(
             model=model,
             base_url=base_url,
             timeout=timeout,
+            grounded_correction=True,
         ).strip()
         output_ratio = len(corrected) / max(1, len(fallback_text))
         if not corrected or output_ratio < 0.45 or output_ratio > 1.60:
@@ -446,6 +441,7 @@ def correct_text(
         )
 
     result["used_llm"] = True
+    result["correction_pipeline"]["llm_based_correction"]["applied"] = True
     first_pass_text = "\n".join(corrected_chunks).strip()
     result["first_pass_text"] = first_pass_text
     result["reconstruction_used"] = False
@@ -458,6 +454,7 @@ def correct_text(
             model=model,
             base_url=base_url,
             timeout=timeout,
+            grounded_correction=True,
         ).strip()
         ratio = len(reconstructed) / max(1, len(first_pass_text))
         if reconstructed and 0.65 <= ratio <= 1.65:

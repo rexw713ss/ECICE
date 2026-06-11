@@ -285,19 +285,43 @@ def main():
     ]
 
     if args.evaluate:
-        steps.append(
-            (
-                "Raw PaddleOCR baseline",
-                [
-                    python_bin,
-                    BASE_DIR / "paddleocr_baseline.py",
-                    "--input",
-                    input_image,
-                    "--output-dir",
-                    paths["baseline_dir"],
-                ],
-                [paths["baseline_text"], paths["baseline_json"]],
-            )
+        steps.extend(
+            [
+                (
+                    "Raw PaddleOCR baseline",
+                    [
+                        python_bin,
+                        BASE_DIR / "paddleocr_baseline.py",
+                        "--input",
+                        input_image,
+                        "--output-dir",
+                        paths["baseline_dir"],
+                    ],
+                    [paths["baseline_text"], paths["baseline_json"]],
+                ),
+                (
+                    "Single-variant ablation OCR",
+                    [
+                        python_bin,
+                        BASE_DIR / "ablation_study.py",
+                        "generate",
+                        "--image",
+                        input_image,
+                        "--manifest",
+                        paths["manifest"],
+                        "--output-dir",
+                        paths["ablation_dir"],
+                    ],
+                    [
+                        paths["ablation_document_text"],
+                        paths["ablation_document_json"],
+                        paths["ablation_blue_ink_text"],
+                        paths["ablation_blue_ink_json"],
+                        paths["ablation_line_removal_text"],
+                        paths["ablation_line_removal_json"],
+                    ],
+                ),
+            ]
         )
 
     steps.extend(
@@ -328,27 +352,61 @@ def main():
     )
 
     if args.evaluate:
-        steps.append(
-            (
-                "CER evaluation",
-                [
-                    python_bin,
-                    BASE_DIR / "cer_evaluation.py",
-                    "--ground-truth-dir",
-                    Path(args.ground_truth_dir).expanduser().resolve(),
-                    "--baseline-dir",
-                    paths["baseline_dir"],
-                    "--ensemble-dir",
-                    paths["ensemble_dir"],
-                    "--llm-dir",
-                    paths["llm_dir"],
-                    "--output-dir",
-                    paths["evaluation_dir"],
-                    "--stem",
-                    input_image.stem,
-                ],
-                [paths["cer_json"], paths["cer_csv"], paths["cer_md"]],
-            )
+        steps.extend(
+            [
+                (
+                    "CER evaluation",
+                    [
+                        python_bin,
+                        BASE_DIR / "cer_evaluation.py",
+                        "--ground-truth-dir",
+                        Path(args.ground_truth_dir).expanduser().resolve(),
+                        "--baseline-dir",
+                        paths["baseline_dir"],
+                        "--ensemble-dir",
+                        paths["ensemble_dir"],
+                        "--llm-dir",
+                        paths["llm_dir"],
+                        "--output-dir",
+                        paths["evaluation_dir"],
+                        "--stem",
+                        input_image.stem,
+                    ],
+                    [
+                        paths["cer_json"],
+                        paths["cer_csv"],
+                        paths["cer_md"],
+                        paths["error_analysis_csv"],
+                    ],
+                ),
+                (
+                    "Ablation study evaluation",
+                    [
+                        python_bin,
+                        BASE_DIR / "ablation_study.py",
+                        "evaluate",
+                        "--ground-truth-dir",
+                        Path(args.ground_truth_dir).expanduser().resolve(),
+                        "--baseline-dir",
+                        paths["baseline_dir"],
+                        "--ablation-dir",
+                        paths["ablation_dir"],
+                        "--ensemble-dir",
+                        paths["ensemble_dir"],
+                        "--llm-dir",
+                        paths["llm_dir"],
+                        "--output-dir",
+                        paths["evaluation_dir"],
+                        "--stem",
+                        input_image.stem,
+                    ],
+                    [
+                        paths["ablation_json"],
+                        paths["ablation_csv"],
+                        paths["ablation_md"],
+                    ],
+                ),
+            ]
         )
 
     steps.append(
@@ -419,6 +477,7 @@ def main():
     print(f"Corrected text: {paths['corrected_text']}")
     if args.evaluate:
         print(f"CER evaluation: {paths['cer_md']}")
+        print(f"Ablation study: {paths['ablation_md']}")
     print(f"Page summary: {paths['summary_md']}")
     if not args.no_quiz and not args.no_llm:
         print(f"Quiz: {paths['quiz_md']}")

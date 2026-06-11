@@ -7,6 +7,7 @@ import json
 import math
 import re
 import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from pipeline_paths import (
@@ -16,6 +17,7 @@ from pipeline_paths import (
     GROUND_TRUTH_DIR,
     LLM_CORRECTION_DIR,
 )
+from traditional_chinese import to_traditional_chinese
 
 
 DEFAULT_METHOD_SUFFIXES = {
@@ -23,6 +25,8 @@ DEFAULT_METHOD_SUFFIXES = {
     "ensemble_only": "_merged_ocr.txt",
     "ensemble_llm": "_corrected.txt",
 }
+
+ERROR_ANALYSIS_TYPES = ("繁簡混用", "相似字誤認", "缺字", "LLM hallucination")
 
 
 def parse_args():
@@ -147,6 +151,171 @@ def evaluate_pair(reference_text, hypothesis_text, *, remove_whitespace):
     return edit_statistics(reference, hypothesis)
 
 
+def aligned_hypothesis_segment(reference, hypothesis, start, end):
+    """Return hypothesis text aligned to a reference character span."""
+    parts = []
+    for tag, ref_start, ref_end, hyp_start, hyp_end in SequenceMatcher(
+        None, reference, hypothesis, autojunk=False
+    ).get_opcodes():
+        overlap_start = max(start, ref_start)
+        overlap_end = min(end, ref_end)
+        if overlap_start >= overlap_end:
+            continue
+        if tag == "equal":
+            parts.append(
+                hypothesis[
+                    hyp_start + overlap_start - ref_start:
+                    hyp_start + overlap_end - ref_start
+                ]
+            )
+        elif tag == "replace":
+            parts.append(hypothesis[hyp_start:hyp_end])
+    return "".join(parts)
+
+
+def hypothesis_insertion_at_reference_position(reference, hypothesis, position):
+    for tag, ref_start, ref_end, hyp_start, hyp_end in SequenceMatcher(
+        None, reference, hypothesis, autojunk=False
+    ).get_opcodes():
+        if tag == "insert" and ref_start == ref_end == position:
+            return hypothesis[hyp_start:hyp_end]
+    return ""
+
+
+def reference_span_is_correct(reference, hypothesis, start, end):
+    for tag, ref_start, ref_end, _, _ in SequenceMatcher(
+        None, reference, hypothesis, autojunk=False
+    ).get_opcodes():
+        if max(start, ref_start) < min(end, ref_end) and tag != "equal":
+            return False
+    return True
+
+
+def error_detail(stem, error_type, reference, raw_ocr, corrected, success):
+    return {
+        "stem": stem,
+        "error_type": error_type,
+        "example": f"GT「{reference or '∅'}」",
+        "raw_ocr": raw_ocr or "∅",
+        "corrected": corrected or "∅",
+        "success": success,
+    }
+
+
+def analyze_document_errors(stem, reference_text, raw_text, corrected_text):
+    """Classify representative OCR/LLM errors against human ground truth."""
+    reference = normalize_text(reference_text, remove_whitespace=True)
+    raw = normalize_text(raw_text, remove_whitespace=True)
+    corrected = normalize_text(corrected_text, remove_whitespace=True)
+    details = []
+
+    for tag, ref_start, ref_end, raw_start, raw_end in SequenceMatcher(
+        None, reference, raw, autojunk=False
+    ).get_opcodes():
+        if tag == "equal":
+            continue
+        reference_segment = reference[ref_start:ref_end]
+        raw_segment = raw[raw_start:raw_end]
+        corrected_segment = aligned_hypothesis_segment(
+            reference, corrected, ref_start, ref_end
+        )
+        success = (
+            "是"
+            if reference_span_is_correct(reference, corrected, ref_start, ref_end)
+            else "否"
+        )
+        if tag == "delete":
+            details.append(
+                error_detail(
+                    stem,
+                    "缺字",
+                    reference_segment,
+                    raw_segment,
+                    corrected_segment,
+                    success,
+                )
+            )
+        elif tag == "replace":
+            error_type = (
+                "繁簡混用"
+                if raw_segment
+                and to_traditional_chinese(raw_segment) == reference_segment
+                else "相似字誤認"
+            )
+            details.append(
+                error_detail(
+                    stem,
+                    error_type,
+                    reference_segment,
+                    raw_segment,
+                    corrected_segment,
+                    success,
+                )
+            )
+
+    for tag, ref_start, ref_end, corrected_start, corrected_end in SequenceMatcher(
+        None, reference, corrected, autojunk=False
+    ).get_opcodes():
+        if tag not in {"insert", "replace"}:
+            continue
+        corrected_segment = corrected[corrected_start:corrected_end]
+        reference_segment = reference[ref_start:ref_end]
+        raw_segment = (
+            hypothesis_insertion_at_reference_position(reference, raw, ref_start)
+            if tag == "insert"
+            else aligned_hypothesis_segment(reference, raw, ref_start, ref_end)
+        )
+        if corrected_segment and corrected_segment != raw_segment:
+            details.append(
+                error_detail(
+                    stem,
+                    "LLM hallucination",
+                    reference_segment,
+                    raw_segment,
+                    corrected_segment,
+                    "否",
+                )
+            )
+    return details
+
+
+def summarize_error_analysis(details):
+    rows = []
+    for error_type in ERROR_ANALYSIS_TYPES:
+        matches = [item for item in details if item["error_type"] == error_type]
+        if not matches:
+            rows.append(
+                {
+                    "error_type": error_type,
+                    "example": "未偵測",
+                    "raw_ocr": "-",
+                    "corrected": "-",
+                    "success": "是（未偵測）" if error_type == "LLM hallucination" else "不適用",
+                }
+            )
+            continue
+        representative = matches[0]
+        statuses = {item["success"] for item in matches}
+        success = statuses.pop() if len(statuses) == 1 else "部分"
+        rows.append(
+            {
+                "error_type": error_type,
+                "example": (
+                    f"{representative['stem']}：{representative['example']}"
+                    f"（共 {len(matches)} 筆）"
+                ),
+                "raw_ocr": representative["raw_ocr"],
+                "corrected": representative["corrected"],
+                "success": success,
+            }
+        )
+    return {
+        "basis": "Human ground truth vs ensemble-only raw OCR vs ensemble + LLM corrected text",
+        "rows": rows,
+        "details": details,
+    }
+
+
 def prediction_paths(stem, baseline_dir, ensemble_dir, llm_dir):
     return {
         "paddleocr_baseline": baseline_dir / f"{stem}{DEFAULT_METHOD_SUFFIXES['paddleocr_baseline']}",
@@ -254,6 +423,16 @@ def evaluate_directories(
                 hypothesis_text,
                 remove_whitespace=True,
             )
+        if "ensemble_only" in document["prediction_paths"] and "ensemble_llm" in document["prediction_paths"]:
+            raw_text = Path(document["prediction_paths"]["ensemble_only"]).read_text(
+                encoding="utf-8-sig"
+            )
+            corrected_text = Path(document["prediction_paths"]["ensemble_llm"]).read_text(
+                encoding="utf-8-sig"
+            )
+            document["error_analysis"] = analyze_document_errors(
+                stem, reference_text, raw_text, corrected_text
+            )
         per_document.append(document)
 
     required_missing = [
@@ -276,6 +455,11 @@ def evaluate_directories(
             aggregate[profile]["ensemble_llm"],
         )
 
+    error_details = [
+        detail
+        for document in per_document
+        for detail in document.get("error_analysis", [])
+    ]
     return {
         "metric": "CER = (substitutions + deletions + insertions) / reference characters",
         "accuracy_metric": "Character accuracy = max(0, 1 - CER)",
@@ -286,6 +470,7 @@ def evaluate_directories(
         },
         "missing_predictions": missing,
         "aggregate": aggregate,
+        "error_analysis": summarize_error_analysis(error_details),
         "documents": per_document,
     }
 
@@ -328,6 +513,27 @@ def write_csv(report, path):
                     )
 
 
+def write_error_analysis_csv(report, path):
+    fieldnames = ["Error Type", "Example", "Raw OCR", "Corrected", "是否成功"]
+    with path.open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in report["error_analysis"]["rows"]:
+            writer.writerow(
+                {
+                    "Error Type": row["error_type"],
+                    "Example": row["example"],
+                    "Raw OCR": row["raw_ocr"],
+                    "Corrected": row["corrected"],
+                    "是否成功": row["success"],
+                }
+            )
+
+
+def markdown_cell(value):
+    return str(value).replace("|", "\\|").replace("\n", "<br>")
+
+
 def write_markdown(report, path):
     lines = [
         "# CER Evaluation",
@@ -368,6 +574,27 @@ def write_markdown(report, path):
             )
         lines.append("")
 
+    lines.extend(
+        [
+            "## Error Analysis",
+            "",
+            "以人工 ground truth 判定；「LLM hallucination」代表校正文新增了 raw OCR 未提供、且與 ground truth 不符的內容。",
+            "",
+            "| Error Type | Example | Raw OCR | Corrected | 是否成功 |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for row in report["error_analysis"]["rows"]:
+        lines.append(
+            "| "
+            + " | ".join(
+                markdown_cell(row[key])
+                for key in ("error_type", "example", "raw_ocr", "corrected", "success")
+            )
+            + " |"
+        )
+    lines.append("")
+
     if report["missing_predictions"]:
         lines.extend(["## Missing Predictions", ""])
         for item in report["missing_predictions"]:
@@ -382,13 +609,15 @@ def save_report(report, output_dir):
     json_path = output_dir / "cer_report.json"
     csv_path = output_dir / "cer_per_document.csv"
     markdown_path = output_dir / "cer_report.md"
+    error_analysis_path = output_dir / "error_analysis.csv"
     json_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     write_csv(report, csv_path)
     write_markdown(report, markdown_path)
-    return json_path, csv_path, markdown_path
+    write_error_analysis_csv(report, error_analysis_path)
+    return json_path, csv_path, markdown_path, error_analysis_path
 
 
 def main():

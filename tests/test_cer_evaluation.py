@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cer_evaluation import edit_statistics, evaluate_directories, evaluate_pair, save_report
+from cer_evaluation import (
+    analyze_document_errors,
+    edit_statistics,
+    evaluate_directories,
+    evaluate_pair,
+    save_report,
+)
 
 
 class EditStatisticsTests(unittest.TestCase):
@@ -36,6 +42,19 @@ class EditStatisticsTests(unittest.TestCase):
 
 
 class DirectoryEvaluationTests(unittest.TestCase):
+    def test_error_analysis_classifies_requested_categories(self):
+        mixed = analyze_document_errors("mixed", "軟體", "软件", "軟體")
+        similar = analyze_document_errors("similar", "法律", "法津", "法律")
+        missing = analyze_document_errors("missing", "法律原則", "法律", "法律原則")
+        hallucination = analyze_document_errors("hallucination", "法律", "法律", "法律新增")
+
+        self.assertEqual(mixed[0]["error_type"], "繁簡混用")
+        self.assertEqual(mixed[0]["success"], "是")
+        self.assertEqual(similar[0]["error_type"], "相似字誤認")
+        self.assertEqual(missing[0]["error_type"], "缺字")
+        self.assertEqual(hallucination[0]["error_type"], "LLM hallucination")
+        self.assertEqual(hallucination[0]["success"], "否")
+
     def test_compares_required_methods_and_optional_ensemble(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -78,6 +97,9 @@ class DirectoryEvaluationTests(unittest.TestCase):
             csv_report = report_paths[1].read_text(encoding="utf-8-sig")
             self.assertIn("cer_percent", csv_report)
             self.assertIn("character_accuracy_percent", csv_report)
+            error_analysis_csv = report_paths[3].read_text(encoding="utf-8-sig")
+            self.assertIn("Error Type,Example,Raw OCR,Corrected,是否成功", error_analysis_csv)
+            self.assertIn("缺字", error_analysis_csv)
 
     def test_rejects_empty_ground_truth(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

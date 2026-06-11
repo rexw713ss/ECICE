@@ -27,6 +27,7 @@ OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 OUTPUT_STAGE_DIRECTORIES = (
     Path("01_preprocessing"),
     Path("02_ocr") / "baseline",
+    Path("02_ocr") / "ablation",
     Path("02_ocr") / "ensemble",
     Path("03_llm_correction"),
     Path("04_evaluation"),
@@ -518,6 +519,7 @@ INDEX_HTML = """<!doctype html>
     const summaryContent = document.getElementById("summaryContent");
     const summarySectionTabs = document.getElementById("summarySectionTabs");
     const runStatus = document.getElementById("runStatus");
+    const ERROR_ANALYSIS_KEY = "__error_analysis__";
 
     let currentRun = null;
     let imageMode = "before";
@@ -596,13 +598,125 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function appendTable(headers, rows) {
+      const table = document.createElement("table");
+      const head = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      for (const header of headers) {
+        const cell = document.createElement("th");
+        cell.textContent = header;
+        headRow.appendChild(cell);
+      }
+      head.appendChild(headRow);
+      table.appendChild(head);
+
+      const body = document.createElement("tbody");
+      for (const row of rows) {
+        const tableRow = document.createElement("tr");
+        for (const value of row) {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          tableRow.appendChild(cell);
+        }
+        body.appendChild(tableRow);
+      }
+      table.appendChild(body);
+      summaryContent.appendChild(table);
+    }
+
+    function formatPercent(value) {
+      return typeof value === "number" ? `${(value * 100).toFixed(2)}%` : "N/A";
+    }
+
+    function renderErrorAnalysis(run) {
+      summaryContent.innerHTML = "";
+      const heading = document.createElement("h1");
+      heading.textContent = "CER 與錯誤分析";
+      summaryContent.appendChild(heading);
+
+      const aggregate = run.evaluation_summary || {};
+      const metricRows = ["paddleocr_baseline", "ensemble_only", "ensemble_llm"]
+        .filter((method) => aggregate[method])
+        .map((method) => [
+          method,
+          formatPercent(aggregate[method].micro_cer),
+          formatPercent(aggregate[method].micro_character_accuracy),
+        ]);
+      if (metricRows.length) {
+        const metricHeading = document.createElement("h2");
+        metricHeading.textContent = "錯誤率與正確率";
+        summaryContent.appendChild(metricHeading);
+        appendTable(["Method", "Error Rate (CER)", "Character Accuracy"], metricRows);
+      }
+
+      let ablationRows = run.ablation_rows || [];
+      const ablationHeading = document.createElement("h2");
+      ablationHeading.textContent = "Ablation Study";
+      summaryContent.appendChild(ablationHeading);
+      if (!ablationRows.length) {
+        const message = document.createElement("p");
+        message.textContent = "尚無 ablation study，請先提供人工 ground truth 並執行 evaluation。";
+        summaryContent.appendChild(message);
+        ablationRows = [
+          ["Raw image + PaddleOCR", "baseline"],
+          ["+ document rectification", "只加文件矯正"],
+          ["+ blue ink extraction", "看藍筆萃取是否有效"],
+          ["+ line removal", "看去橫線是否有效"],
+          ["+ multi-variant ensemble", "看 ensemble 是否有效"],
+          ["+ LLM correction", "完整 correction stage"],
+        ].map(([setting, description]) => ({ setting, description }));
+      }
+      appendTable(
+        ["Setting", "CER ↓", "Accuracy ↑", "Δ CER vs baseline", "說明"],
+        ablationRows.map((row) => [
+          row.setting,
+          formatPercent(row.cer),
+          formatPercent(row.character_accuracy),
+          formatPercent(row.delta_cer_vs_baseline),
+          row.description,
+        ]),
+      );
+      const ablationNote = document.createElement("p");
+      ablationNote.textContent = "Δ CER < 0 表示相較 raw baseline 改善；單一 preprocessing variant 彼此不是累加設定。";
+      summaryContent.appendChild(ablationNote);
+
+      const analysisHeading = document.createElement("h2");
+      analysisHeading.textContent = "錯誤分析表";
+      summaryContent.appendChild(analysisHeading);
+      let rows = run.error_analysis_rows || [];
+      if (!rows.length) {
+        const message = document.createElement("p");
+        message.textContent = "尚無錯誤分析，請先提供人工 ground truth 並執行 CER evaluation。";
+        summaryContent.appendChild(message);
+        rows = ["繁簡混用", "相似字誤認", "缺字", "LLM hallucination"].map((errorType) => ({
+          error_type: errorType,
+          example: "尚未評估",
+          raw_ocr: "-",
+          corrected: "-",
+          success: "不適用",
+        }));
+      }
+      appendTable(
+        ["Error Type", "Example", "Raw OCR", "Corrected", "是否成功"],
+        rows.map((row) => [
+          row.error_type,
+          row.example,
+          row.raw_ocr,
+          row.corrected,
+          row.success,
+        ]),
+      );
+    }
+
     function showSummarySection(key) {
       if (!currentRun) {
         return;
       }
 
       summarySectionKey = key;
-      if (key === "__all__") {
+      if (key === ERROR_ANALYSIS_KEY) {
+        renderErrorAnalysis(currentRun);
+      } else if (key === "__all__") {
         summaryContent.innerHTML = currentRun.summary_html || '<p>尚無摘要內容</p>';
       } else {
         const section = (currentRun.summary_sections || []).find((item) => item.key === key);
@@ -619,7 +733,11 @@ INDEX_HTML = """<!doctype html>
     function renderSummarySections(run) {
       summarySectionTabs.innerHTML = "";
       const sections = run.summary_sections || [];
-      const buttons = [{ key: "__all__", title: "全文" }, ...sections];
+      const buttons = [
+        { key: "__all__", title: "全文" },
+        ...sections,
+        { key: ERROR_ANALYSIS_KEY, title: "CER 與錯誤分析" },
+      ];
 
       for (const section of buttons) {
         const button = document.createElement("button");
@@ -786,6 +904,8 @@ def discover_runs():
         summary_json_path = paths["summary_json"]
         manifest = load_json(manifest_path)
         summary_data = load_json(summary_json_path)
+        evaluation_data = load_json(paths["cer_json"])
+        ablation_data = load_json(paths["ablation_json"])
         original = resolve_original_image(stem, manifest)
         processed_variants = resolve_processed_variants(stem, manifest)
         default_processed_key = next(
@@ -799,6 +919,8 @@ def discover_runs():
                 "summary_path": summary_path.resolve(),
                 "summary_json_path": summary_json_path.resolve(),
                 "summary_data": summary_data,
+                "evaluation_data": evaluation_data,
+                "ablation_data": ablation_data,
                 "original": original,
                 "processed_variants": processed_variants,
                 "default_processed_key": default_processed_key,
@@ -824,6 +946,18 @@ def basename(path):
 
 def public_run(run, include_summary=False):
     summary_data = run["summary_data"]
+    evaluation_data = run.get("evaluation_data", {})
+    ablation_data = run.get("ablation_data", {})
+    ablation_aggregate = ablation_data.get("aggregate", {}).get("no_whitespace", {})
+    ablation_rows = [
+        {
+            "setting": setting.get("label", setting.get("id", "")),
+            "setting_id": setting.get("id", ""),
+            "description": setting.get("description", ""),
+            **ablation_aggregate.get(setting.get("id", ""), {}),
+        }
+        for setting in ablation_data.get("settings", [])
+    ]
     original = (
         {
             "key": "original",
@@ -853,6 +987,9 @@ def public_run(run, include_summary=False):
         "original": original,
         "processed_variants": processed_variants,
         "default_processed_key": run["default_processed_key"],
+        "evaluation_summary": evaluation_data.get("aggregate", {}).get("no_whitespace", {}),
+        "error_analysis_rows": evaluation_data.get("error_analysis", {}).get("rows", []),
+        "ablation_rows": ablation_rows,
     }
     if include_summary:
         summary = read_text(run["summary_path"])
