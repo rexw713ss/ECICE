@@ -71,5 +71,14 @@ Preview every command and output path without running models:
   --dry-run
 ```
 
+Open the local result viewer:
+
+```powershell
+.\env\Scripts\python.exe ui_app.py
+```
+
+The UI reads the numbered stage folders under `output/`. For a custom output root,
+pass `--output-dir <path>`.
+
 See [CER_EVALUATION.md](CER_EVALUATION.md) for metric definitions and batch CER
 evaluation instructions.

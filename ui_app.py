@@ -11,13 +11,28 @@ from pathlib import Path
 import re
 from urllib.parse import unquote, urlparse
 
+from pipeline_paths import (
+    DATASET_DIR as DEFAULT_DATASET_DIR,
+    OUTPUT_ROOT,
+    build_stage_paths,
+)
+
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = BASE_DIR / "output" / "layout_result"
-DATASET_DIR = BASE_DIR / "dataset"
+DEFAULT_OUTPUT_DIR = OUTPUT_ROOT
+DATASET_DIR = DEFAULT_DATASET_DIR
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".JPG", ".JPEG", ".PNG")
 
 OUTPUT_DIR = DEFAULT_OUTPUT_DIR
+OUTPUT_STAGE_DIRECTORIES = (
+    Path("01_preprocessing"),
+    Path("02_ocr") / "baseline",
+    Path("02_ocr") / "ensemble",
+    Path("03_llm_correction"),
+    Path("04_evaluation"),
+    Path("05_summary"),
+    Path("06_quiz"),
+)
 
 VARIANT_LABELS = {
     "document": "文件校正",
@@ -634,7 +649,7 @@ INDEX_HTML = """<!doctype html>
         runSelect.innerHTML = "";
         if (!runs.length) {
           runStatus.textContent = "找不到輸出結果";
-          summaryContent.innerHTML = '<p>output/layout_result 尚未產生 summary.md。</p>';
+          summaryContent.innerHTML = '<p>output/05_summary 尚未產生 summary.md。</p>';
           return;
         }
 
@@ -673,14 +688,14 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),
-        help=f"Pipeline output directory. Default: {DEFAULT_OUTPUT_DIR}",
+        help=f"Pipeline output root containing numbered stage folders. Default: {DEFAULT_OUTPUT_DIR}",
     )
     return parser.parse_args()
 
 
 def load_json(path):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -702,15 +717,12 @@ def path_candidates(value):
     if path.is_absolute():
         candidates.append(path)
     else:
+        candidates.extend((BASE_DIR / path, OUTPUT_DIR / path))
         candidates.extend(
-            (
-                BASE_DIR / path,
-                OUTPUT_DIR / path,
-                OUTPUT_DIR / path.name,
-                DATASET_DIR / path.name,
-                BASE_DIR / path.name,
-            )
+            OUTPUT_DIR / stage_dir / path.name
+            for stage_dir in OUTPUT_STAGE_DIRECTORIES
         )
+        candidates.extend((DATASET_DIR / path.name, BASE_DIR / path.name))
     return candidates
 
 
@@ -751,9 +763,10 @@ def resolve_processed_variants(stem, manifest):
                     }
                 )
 
+    paths = build_stage_paths(Path(f"{stem}.jpg"), OUTPUT_DIR)
     extra_paths = {
-        "merged_ocr": OUTPUT_DIR / f"{stem}_merged_ocr.jpg",
-        "merged_ocr_review": OUTPUT_DIR / f"{stem}_merged_ocr_review.jpg",
+        "merged_ocr": paths["ensemble_dir"] / f"{stem}_merged_ocr.jpg",
+        "merged_ocr_review": paths["ensemble_dir"] / f"{stem}_merged_ocr_review.jpg",
     }
     known_keys = {item["key"] for item in variants}
     for key, path in extra_paths.items():
@@ -765,10 +778,12 @@ def resolve_processed_variants(stem, manifest):
 
 def discover_runs():
     runs = []
-    for summary_path in sorted(OUTPUT_DIR.glob("*_summary.md")):
+    summary_dir = OUTPUT_DIR / "05_summary"
+    for summary_path in sorted(summary_dir.glob("*_summary.md")):
         stem = summary_path.name[: -len("_summary.md")]
-        manifest_path = OUTPUT_DIR / f"{stem}_preprocess_manifest.json"
-        summary_json_path = OUTPUT_DIR / f"{stem}_summary.json"
+        paths = build_stage_paths(Path(f"{stem}.jpg"), OUTPUT_DIR)
+        manifest_path = paths["manifest"]
+        summary_json_path = paths["summary_json"]
         manifest = load_json(manifest_path)
         summary_data = load_json(summary_json_path)
         original = resolve_original_image(stem, manifest)
