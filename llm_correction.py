@@ -7,10 +7,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from pipeline_paths import ENSEMBLE_OCR_DIR, LLM_CORRECTION_DIR
+from traditional_chinese import (
+    TRADITIONAL_CHINESE_INSTRUCTION,
+    to_traditional_chinese,
+)
+
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_OCR_TEXT = BASE_DIR / "output" / "layout_result" / "OCR_test_lin_merged_ocr.txt"
-DEFAULT_OCR_JSON = BASE_DIR / "output" / "layout_result" / "OCR_test_lin_merged_ocr.json"
+DEFAULT_OCR_TEXT = ENSEMBLE_OCR_DIR / "OCR_test_lin_merged_ocr.txt"
+DEFAULT_OCR_JSON = ENSEMBLE_OCR_DIR / "OCR_test_lin_merged_ocr.json"
 DEFAULT_LLM_PROVIDER = "ollama"
 DEFAULT_LOCAL_MODEL = "gemma4:latest"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
@@ -22,11 +28,11 @@ def default_corrected_path(input_path):
     stem = input_path.stem
     if stem.endswith("_merged_ocr"):
         stem = stem[: -len("_merged_ocr")]
-    return input_path.with_name(f"{stem}_corrected.txt")
+    return LLM_CORRECTION_DIR / f"{stem}_corrected.txt"
 
 
 def normalize_ocr_noise(text):
-    text = unicodedata.normalize("NFKC", text)
+    text = unicodedata.normalize("NFC", text)
     text = text.replace("\ufeff", "")
     text = text.replace("\u200b", "")
     text = re.sub(r"[ \t]+", " ", text)
@@ -53,7 +59,7 @@ def normalize_ocr_noise(text):
     }
     for wrong, right in replacements.items():
         text = text.replace(wrong, right)
-    return text.strip()
+    return to_traditional_chinese(text.strip())
 
 
 def finalize_legal_text(text):
@@ -97,7 +103,7 @@ def finalize_legal_text(text):
     for wrong, right in replacements.items():
         text = text.replace(wrong, right)
     text = re.sub(r"限於([^，。\n]+)為限", r"限於\1", text)
-    return text.strip()
+    return to_traditional_chinese(text.strip())
 
 
 def split_text(text, max_chars=1000):
@@ -130,13 +136,13 @@ def build_ocr_evidence_chunks(ocr_json_path, max_chars=3000, max_alternatives=3)
     blocks = []
     primary_lines = []
     for item in results:
-        primary = str(item.get("text", "")).strip()
+        primary = to_traditional_chinese(str(item.get("text", "")).strip())
         if not primary:
             continue
         alternatives = []
         seen = {primary}
         for alternative in item.get("alternatives", []):
-            text = str(alternative.get("text", "")).strip()
+            text = to_traditional_chinese(str(alternative.get("text", "")).strip())
             if not text or text in seen:
                 continue
             seen.add(text)
@@ -332,27 +338,41 @@ def chat_completion(
     base_url=None,
     timeout=90,
 ):
+    messages = [dict(message) for message in messages]
+    instruction_added = False
+    for message in messages:
+        if message.get("role") == "system":
+            message["content"] = (
+                str(message.get("content", "")) + TRADITIONAL_CHINESE_INSTRUCTION
+            )
+            instruction_added = True
+            break
+    if not instruction_added:
+        messages.insert(
+            0,
+            {"role": "system", "content": TRADITIONAL_CHINESE_INSTRUCTION.strip()},
+        )
+
     provider = (
         provider
         or os.getenv("LLM_PROVIDER")
         or DEFAULT_LLM_PROVIDER
     ).lower()
     if provider in ("ollama", "local", "gemma", "gemma4"):
-        return ollama_chat_completion(
-            messages,
-            model=model,
-            base_url=base_url,
-            timeout=timeout,
+        output = ollama_chat_completion(
+            messages, model=model, base_url=base_url, timeout=timeout
         )
-    if provider in ("openai", "openai-compatible", "lmstudio", "vllm"):
-        return openai_compatible_chat_completion(
+    elif provider in ("openai", "openai-compatible", "lmstudio", "vllm"):
+        output = openai_compatible_chat_completion(
             messages,
             api_key=api_key,
             model=model,
             base_url=base_url,
             timeout=timeout,
         )
-    raise ValueError(f"Unsupported LLM provider: {provider}")
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+    return to_traditional_chinese(output)
 
 
 def correct_text(
@@ -376,6 +396,7 @@ def correct_text(
         "input_length": len(text),
         "normalized_length": len(normalized),
         "corrected_text": normalized,
+        "output_script": "Traditional Chinese (Taiwan)",
         "chunks": [],
     }
     if not use_llm:
@@ -412,6 +433,7 @@ def correct_text(
                 f"(length ratio {output_ratio:.2f}). Using OCR text instead."
             )
             corrected = fallback_text
+        corrected = to_traditional_chinese(corrected)
         corrected_chunks.append(corrected)
         result["chunks"].append(
             {

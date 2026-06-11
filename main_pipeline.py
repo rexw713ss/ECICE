@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the note digitization pipeline from image to summary and quiz."""
+"""Run the organized note OCR experiment from preprocessing through quiz."""
 
 import argparse
 import json
@@ -11,9 +11,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from pipeline_paths import GROUND_TRUTH_DIR, OUTPUT_ROOT, build_stage_paths
+
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = BASE_DIR / "output" / "layout_result"
+DEFAULT_OUTPUT_DIR = OUTPUT_ROOT
 
 
 def parse_args():
@@ -26,7 +28,7 @@ def parse_args():
         "--output_dir",
         dest="output_dir",
         default=str(DEFAULT_OUTPUT_DIR),
-        help=f"Output directory. Default: {DEFAULT_OUTPUT_DIR}",
+        help=f"Root directory for numbered stage outputs. Default: {DEFAULT_OUTPUT_DIR}",
     )
     parser.add_argument(
         "--model",
@@ -69,6 +71,16 @@ def parse_args():
         "--no-quiz",
         action="store_true",
         help="Generate the page summary but skip quiz generation.",
+    )
+    parser.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="Generate raw PaddleOCR baseline and run CER after LLM correction.",
+    )
+    parser.add_argument(
+        "--ground-truth-dir",
+        default=str(GROUND_TRUTH_DIR),
+        help="Directory containing <image_stem>.txt human transcriptions.",
     )
     parser.add_argument(
         "--dry-run",
@@ -126,25 +138,9 @@ def run_step(step_number, step_name, command, expected_outputs, *, resume=False,
     print(f"Completed in {elapsed:.1f} seconds.")
 
 
-def build_paths(input_image, output_dir):
-    stem = input_image.stem
-    return {
-        "manifest": output_dir / f"{stem}_preprocess_manifest.json",
-        "preprocessed": output_dir / f"{stem}_preprocessed_input.jpg",
-        "ocr_text": output_dir / f"{stem}_merged_ocr.txt",
-        "ocr_json": output_dir / f"{stem}_merged_ocr.json",
-        "corrected_text": output_dir / f"{stem}_corrected.txt",
-        "corrected_json": output_dir / f"{stem}_corrected.json",
-        "summary_md": output_dir / f"{stem}_summary.md",
-        "summary_json": output_dir / f"{stem}_summary.json",
-        "quiz_md": output_dir / f"{stem}_quiz.md",
-        "quiz_json": output_dir / f"{stem}_quiz.json",
-    }
-
-
 def load_json(path):
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        return json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Could not read pipeline metadata: {path}") from exc
 
@@ -213,10 +209,12 @@ def main():
     output_dir = Path(args.output_dir).expanduser().resolve()
     if not input_image.is_file():
         raise SystemExit(f"Input image not found: {input_image}")
+    if args.evaluate and args.no_llm:
+        raise SystemExit("--evaluate requires LLM correction; remove --no-llm.")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     python_bin = Path(sys.executable).resolve()
-    paths = build_paths(input_image, output_dir)
+    paths = build_stage_paths(input_image, output_dir)
     use_llm_args = (
         []
         if args.no_llm
@@ -239,6 +237,7 @@ def main():
     print(f"Output directory: {output_dir}")
     print(f"Python: {python_bin}")
     print(f"LLM enabled: {not args.no_llm}")
+    print(f"CER evaluation enabled: {args.evaluate}")
     if not args.no_llm:
         print(f"Ollama model: {args.model}")
         print(f"Ollama base URL: {args.base_url}")
@@ -249,7 +248,9 @@ def main():
         "--image",
         input_image,
         "--output-dir",
-        output_dir,
+        paths["ensemble_dir"],
+        "--preprocess-dir",
+        paths["preprocess_dir"],
         "--skip-preprocess",
     ]
     if args.fast_ocr:
@@ -277,32 +278,80 @@ def main():
                 "--image",
                 input_image,
                 "--output-dir",
-                output_dir,
+                paths["preprocess_dir"],
             ],
             [paths["manifest"], paths["preprocessed"]],
         ),
-        (
-            "OCR recognition",
-            ocr_args,
-            [paths["ocr_text"], paths["ocr_json"]],
-        ),
-        (
-            "LLM text correction" if not args.no_llm else "Rule-based text correction",
-            [
-                python_bin,
-                BASE_DIR / "llm_correction.py",
-                "--input",
-                paths["ocr_text"],
-                "--output",
-                paths["corrected_text"],
-                "--ocr-json",
-                paths["ocr_json"],
-                "--timeout",
-                str(args.llm_timeout),
-                *use_llm_args,
-            ],
-            [paths["corrected_text"], paths["corrected_json"]],
-        ),
+    ]
+
+    if args.evaluate:
+        steps.append(
+            (
+                "Raw PaddleOCR baseline",
+                [
+                    python_bin,
+                    BASE_DIR / "paddleocr_baseline.py",
+                    "--input",
+                    input_image,
+                    "--output-dir",
+                    paths["baseline_dir"],
+                ],
+                [paths["baseline_text"], paths["baseline_json"]],
+            )
+        )
+
+    steps.extend(
+        [
+            (
+                "Multi-variant ensemble OCR",
+                ocr_args,
+                [paths["ocr_text"], paths["ocr_json"]],
+            ),
+            (
+                "LLM text correction" if not args.no_llm else "Rule-based text correction",
+                [
+                    python_bin,
+                    BASE_DIR / "llm_correction.py",
+                    "--input",
+                    paths["ocr_text"],
+                    "--output",
+                    paths["corrected_text"],
+                    "--ocr-json",
+                    paths["ocr_json"],
+                    "--timeout",
+                    str(args.llm_timeout),
+                    *use_llm_args,
+                ],
+                [paths["corrected_text"], paths["corrected_json"]],
+            ),
+        ]
+    )
+
+    if args.evaluate:
+        steps.append(
+            (
+                "CER evaluation",
+                [
+                    python_bin,
+                    BASE_DIR / "cer_evaluation.py",
+                    "--ground-truth-dir",
+                    Path(args.ground_truth_dir).expanduser().resolve(),
+                    "--baseline-dir",
+                    paths["baseline_dir"],
+                    "--ensemble-dir",
+                    paths["ensemble_dir"],
+                    "--llm-dir",
+                    paths["llm_dir"],
+                    "--output-dir",
+                    paths["evaluation_dir"],
+                    "--stem",
+                    input_image.stem,
+                ],
+                [paths["cer_json"], paths["cer_csv"], paths["cer_md"]],
+            )
+        )
+
+    steps.append(
         (
             "Page summary generation",
             [
@@ -317,8 +366,8 @@ def main():
                 *use_llm_args,
             ],
             [paths["summary_md"], paths["summary_json"]],
-        ),
-    ]
+        )
+    )
 
     if not args.no_quiz and not args.no_llm:
         steps.append(
@@ -368,6 +417,8 @@ def main():
     print(f"Preprocessed image: {paths['preprocessed']}")
     print(f"OCR text: {paths['ocr_text']}")
     print(f"Corrected text: {paths['corrected_text']}")
+    if args.evaluate:
+        print(f"CER evaluation: {paths['cer_md']}")
     print(f"Page summary: {paths['summary_md']}")
     if not args.no_quiz and not args.no_llm:
         print(f"Quiz: {paths['quiz_md']}")
@@ -380,5 +431,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# 運行指令python main_pipeline.py --input ECICE/dataset/OCR_test_lin.jpg

@@ -13,9 +13,11 @@ from llm_correction import (
     chat_completion,
     normalize_ocr_noise,
 )
+from traditional_chinese import to_traditional_chinese
+from pipeline_paths import LLM_CORRECTION_DIR, SUMMARY_DIR
 
 
-DEFAULT_CORRECTED_TEXT = BASE_DIR / "output" / "layout_result" / "OCR_test_lin_corrected.txt"
+DEFAULT_CORRECTED_TEXT = LLM_CORRECTION_DIR / "OCR_test_lin_corrected.txt"
 SUMMARY_SECTIONS = (
     "本頁主題",
     "重點摘要",
@@ -47,7 +49,7 @@ def default_summary_path(input_path):
     for suffix in ("_corrected", "_merged_ocr"):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
-    return input_path.with_name(f"{stem}_summary.md")
+    return SUMMARY_DIR / f"{stem}_summary.md"
 
 
 def strip_markdown_fences(text):
@@ -249,7 +251,7 @@ def summarize_text(
         base_url=base_url,
         timeout=timeout,
     )
-    summary = normalize_summary(generated)
+    summary = to_traditional_chinese(normalize_summary(generated))
     validation_errors = validate_summary_document(summary)
     if validation_errors:
         raise RuntimeError("LLM summary failed validation: " + "; ".join(validation_errors))
@@ -289,6 +291,8 @@ def summarize_file(
     result["document_type"] = "page_summary"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    result["summary"] = to_traditional_chinese(result["summary"])
+    result["output_script"] = "Traditional Chinese (Taiwan)"
     output_path.write_text(result["summary"], encoding="utf-8")
     result_path = output_path.with_suffix(".json")
     result_path.write_text(

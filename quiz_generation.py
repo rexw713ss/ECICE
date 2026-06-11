@@ -16,9 +16,11 @@ from note_summarization import (
     has_suspicious_ocr_noise,
     strip_markdown_fences,
 )
+from traditional_chinese import to_traditional_chinese
+from pipeline_paths import QUIZ_DIR, SUMMARY_DIR
 
 
-DEFAULT_SUMMARY = BASE_DIR / "output" / "layout_result" / "OCR_test_lin_summary.md"
+DEFAULT_SUMMARY = SUMMARY_DIR / "OCR_test_lin_summary.md"
 QUESTION_SECTIONS = ("單選題", "是非題", "簡答題")
 ANSWER_SECTIONS = ("單選題答案與解析", "是非題答案與解析", "簡答題答案與解析")
 ALL_QUIZ_SECTIONS = (*QUESTION_SECTIONS, *ANSWER_SECTIONS)
@@ -35,7 +37,7 @@ def default_quiz_path(summary_path):
     stem = summary_path.stem
     if stem.endswith("_summary"):
         stem = stem[: -len("_summary")]
-    return summary_path.with_name(f"{stem}_quiz.md")
+    return QUIZ_DIR / f"{stem}_quiz.md"
 
 
 def prepare_quiz_source(summary):
@@ -221,7 +223,7 @@ def generate_quiz(
     if missing:
         raise RuntimeError("LLM quiz is missing sections: " + ", ".join(missing))
 
-    quiz = assemble_quiz(objective_parts, short_parts)
+    quiz = to_traditional_chinese(assemble_quiz(objective_parts, short_parts))
     validation = validate_quiz_document(quiz, question_count)
     if validation["validation_errors"]:
         raise RuntimeError("LLM quiz failed validation: " + "; ".join(validation["validation_errors"]))
@@ -258,6 +260,8 @@ def generate_quiz_file(
     )
     result["document_type"] = "quiz"
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    result["quiz"] = to_traditional_chinese(result["quiz"])
+    result["output_script"] = "Traditional Chinese (Taiwan)"
     output_path.write_text(result["quiz"], encoding="utf-8")
     result_path = output_path.with_suffix(".json")
     result_path.write_text(

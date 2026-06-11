@@ -12,7 +12,9 @@ except ModuleNotFoundError as exc:
     print(r"Install with: .\env\Scripts\python.exe -m pip install opencv-python-headless")
     raise SystemExit(1) from exc
 
-from image_preprocessing import DEFAULT_IMAGE_PATH, DEFAULT_OUTPUT_DIR, preprocess_image
+from image_preprocessing import DEFAULT_IMAGE_PATH, preprocess_image
+from pipeline_paths import ENSEMBLE_OCR_DIR, PREPROCESS_DIR
+from traditional_chinese import to_traditional_chinese
 
 MIN_CANDIDATE_SCORE = 0.25
 TILE_CONFIGS = ((520, 200), (340, 140), (240, 90))
@@ -88,8 +90,8 @@ def create_ocr_engine(
 ):
     PaddleOCR = import_paddleocr()
     return PaddleOCR(
-        # 如果你的環境有安裝繁體包，可以嘗試 lang="chinese_cht"，若無則維持 "ch"
-        lang="ch", 
+        # Request Traditional Chinese recognition before deterministic normalization.
+        lang="chinese_cht",
         
         # 啟用文字行傾斜偵測與方向分類
         use_textline_orientation=use_textline_orientation,
@@ -125,16 +127,16 @@ def save_image(path, image):
         raise OSError(f"Failed to save image: {path}")
 
 
-def load_manifest(image_path, output_dir, skip_preprocess=False):
+def load_manifest(image_path, preprocess_dir, skip_preprocess=False):
     image_path = Path(image_path)
-    output_dir = Path(output_dir)
-    manifest_path = output_dir / f"{image_path.stem}_preprocess_manifest.json"
+    preprocess_dir = Path(preprocess_dir)
+    manifest_path = preprocess_dir / f"{image_path.stem}_preprocess_manifest.json"
     if skip_preprocess and manifest_path.is_file():
         with manifest_path.open("r", encoding="utf-8") as file:
             manifest = json.load(file)
         manifest["manifest_path"] = str(manifest_path)
         return manifest
-    return preprocess_image(image_path, output_dir)
+    return preprocess_image(image_path, preprocess_dir)
 
 
 def load_variants(manifest):
@@ -211,7 +213,7 @@ def extract_candidates(
     boxes = result_data.get("rec_boxes", [])
 
     for text, score, box in zip(texts, scores, boxes):
-        text = str(text).strip()
+        text = to_traditional_chinese(str(text).strip())
         score = float(score)
         if not text or score < MIN_CANDIDATE_SCORE or len(box) < 4:
             continue
@@ -509,6 +511,8 @@ def save_ocr_results(output_dir, image_stem, document_image, candidates, merged,
             "det_thresh": settings["det_thresh"],
             "det_box_thresh": settings["det_box_thresh"],
             "det_unclip_ratio": settings["det_unclip_ratio"],
+            "ocr_language": "chinese_cht",
+            "output_script": "Traditional Chinese (Taiwan)",
         },
         "statistics": {
             "raw_candidate_count": len(candidates),
@@ -538,7 +542,8 @@ def save_ocr_results(output_dir, image_stem, document_image, candidates, merged,
 
 def run_ocr(
     image_path=DEFAULT_IMAGE_PATH,
-    output_dir=DEFAULT_OUTPUT_DIR,
+    output_dir=ENSEMBLE_OCR_DIR,
+    preprocess_dir=PREPROCESS_DIR,
     skip_preprocess=False,
     full_sources=FULL_SOURCES,
     tile_sources=TILE_SOURCES,
@@ -553,7 +558,7 @@ def run_ocr(
     det_box_thresh=0.35,
     det_unclip_ratio=1.45,
 ):
-    manifest = load_manifest(image_path, output_dir, skip_preprocess=skip_preprocess)
+    manifest = load_manifest(image_path, preprocess_dir, skip_preprocess=skip_preprocess)
     variants = load_variants(manifest)
     ocr_engine = create_ocr_engine(
         det_limit_side_len=det_limit_side_len,
@@ -607,7 +612,12 @@ def run_ocr(
 def parse_args():
     parser = argparse.ArgumentParser(description="Module 2: OCR recognition for lecture notes.")
     parser.add_argument("--image", default=str(DEFAULT_IMAGE_PATH), help="Input note image.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Output folder.")
+    parser.add_argument("--output-dir", default=str(ENSEMBLE_OCR_DIR), help="OCR output folder.")
+    parser.add_argument(
+        "--preprocess-dir",
+        default=str(PREPROCESS_DIR),
+        help="Folder containing preprocessing variants and manifest.",
+    )
     parser.add_argument(
         "--skip-preprocess",
         action="store_true",
@@ -662,6 +672,7 @@ def main():
     paths = run_ocr(
         args.image,
         args.output_dir,
+        preprocess_dir=args.preprocess_dir,
         skip_preprocess=args.skip_preprocess,
         full_sources=parse_source_list(args.full_sources, FULL_SOURCES),
         tile_sources=parse_source_list(args.tile_sources, TILE_SOURCES),

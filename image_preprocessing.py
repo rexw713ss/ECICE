@@ -11,9 +11,12 @@ except ModuleNotFoundError as exc:
     raise SystemExit(1) from exc
 
 
+from pipeline_paths import DATASET_DIR, PREPROCESS_DIR
+
+
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_IMAGE_PATH = BASE_DIR / "OCR_test_lin.jpg"
-DEFAULT_OUTPUT_DIR = BASE_DIR / "output" / "layout_result"
+DEFAULT_IMAGE_PATH = DATASET_DIR / "OCR_test_lin.jpg"
+DEFAULT_OUTPUT_DIR = PREPROCESS_DIR
 
 
 def save_image(path, image):
