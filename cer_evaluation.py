@@ -256,14 +256,12 @@ def analyze_document_errors(stem, reference_text, raw_text, corrected_text):
     for tag, ref_start, ref_end, corrected_start, corrected_end in SequenceMatcher(
         None, reference, corrected, autojunk=False
     ).get_opcodes():
-        if tag not in {"insert", "replace"}:
+        if tag != "insert":
             continue
         corrected_segment = corrected[corrected_start:corrected_end]
         reference_segment = reference[ref_start:ref_end]
-        raw_segment = (
-            hypothesis_insertion_at_reference_position(reference, raw, ref_start)
-            if tag == "insert"
-            else aligned_hypothesis_segment(reference, raw, ref_start, ref_end)
+        raw_segment = hypothesis_insertion_at_reference_position(
+            reference, raw, ref_start
         )
         if corrected_segment and corrected_segment != raw_segment:
             details.append(

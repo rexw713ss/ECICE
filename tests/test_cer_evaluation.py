@@ -47,6 +47,7 @@ class DirectoryEvaluationTests(unittest.TestCase):
         similar = analyze_document_errors("similar", "法律", "法津", "法律")
         missing = analyze_document_errors("missing", "法律原則", "法律", "法律原則")
         hallucination = analyze_document_errors("hallucination", "法律", "法律", "法律新增")
+        wrong_replacement = analyze_document_errors("replacement", "法律", "法律", "法津")
 
         self.assertEqual(mixed[0]["error_type"], "繁簡混用")
         self.assertEqual(mixed[0]["success"], "是")
@@ -54,6 +55,9 @@ class DirectoryEvaluationTests(unittest.TestCase):
         self.assertEqual(missing[0]["error_type"], "缺字")
         self.assertEqual(hallucination[0]["error_type"], "LLM hallucination")
         self.assertEqual(hallucination[0]["success"], "否")
+        self.assertFalse(
+            any(item["error_type"] == "LLM hallucination" for item in wrong_replacement)
+        )
 
     def test_compares_required_methods_and_optional_ensemble(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

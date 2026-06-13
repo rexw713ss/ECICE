@@ -332,6 +332,22 @@ def main():
                 [paths["ocr_text"], paths["ocr_json"]],
             ),
             (
+                "Rule-based-only ablation correction",
+                [
+                    python_bin,
+                    BASE_DIR / "llm_correction.py",
+                    "--input",
+                    paths["ocr_text"],
+                    "--output",
+                    paths["rule_based_text"],
+                    "--ocr-json",
+                    paths["ocr_json"],
+                    "--timeout",
+                    str(args.llm_timeout),
+                ],
+                [paths["rule_based_text"], paths["rule_based_json"]],
+            ) if args.evaluate else None,
+            (
                 "LLM text correction" if not args.no_llm else "Rule-based text correction",
                 [
                     python_bin,
@@ -350,6 +366,7 @@ def main():
             ),
         ]
     )
+    steps = [step for step in steps if step is not None]
 
     if args.evaluate:
         steps.extend(

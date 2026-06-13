@@ -663,16 +663,18 @@ INDEX_HTML = """<!doctype html>
           ["+ blue ink extraction", "看藍筆萃取是否有效"],
           ["+ line removal", "看去橫線是否有效"],
           ["+ multi-variant ensemble", "看 ensemble 是否有效"],
-          ["+ LLM correction", "完整 correction stage"],
+          ["+ rule-based normalization", "只套用 deterministic normalization"],
+          ["+ LLM correction", "在 rule-based normalization 後加入 grounded LLM"],
         ].map(([setting, description]) => ({ setting, description }));
       }
       appendTable(
-        ["Setting", "CER ↓", "Accuracy ↑", "Δ CER vs baseline", "說明"],
+        ["Setting", "CER ↓", "Accuracy ↑", "Δ CER vs baseline", "Δ CER vs parent", "說明"],
         ablationRows.map((row) => [
           row.setting,
           formatPercent(row.cer),
           formatPercent(row.character_accuracy),
           formatPercent(row.delta_cer_vs_baseline),
+          formatPercent(row.delta_cer_vs_parent),
           row.description,
         ]),
       );

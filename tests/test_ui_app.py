@@ -49,6 +49,7 @@ class UiAppTests(unittest.TestCase):
                                 "cer": 0.2,
                                 "character_accuracy": 0.8,
                                 "delta_cer_vs_baseline": 0,
+                                "delta_cer_vs_parent": None,
                             }
                         }
                     },

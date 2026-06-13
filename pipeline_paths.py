@@ -48,6 +48,8 @@ def build_stage_paths(input_image, output_root=OUTPUT_ROOT):
         "ocr_json": directories["ensemble_dir"] / f"{stem}_merged_ocr.json",
         "corrected_text": directories["llm_dir"] / f"{stem}_corrected.txt",
         "corrected_json": directories["llm_dir"] / f"{stem}_corrected.json",
+        "rule_based_text": directories["llm_dir"] / f"{stem}_rule_based.txt",
+        "rule_based_json": directories["llm_dir"] / f"{stem}_rule_based.json",
         "cer_json": directories["evaluation_dir"] / "cer_report.json",
         "cer_csv": directories["evaluation_dir"] / "cer_per_document.csv",
         "cer_md": directories["evaluation_dir"] / "cer_report.md",

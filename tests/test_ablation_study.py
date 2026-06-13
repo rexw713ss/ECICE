@@ -6,7 +6,7 @@ from ablation_study import ABLATION_SETTINGS, evaluate_ablation, save_report
 
 
 class AblationStudyTests(unittest.TestCase):
-    def test_evaluates_six_settings_in_requested_order(self):
+    def test_evaluates_requested_settings_in_order(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             ground_truth = root / "ground_truth"
@@ -24,6 +24,7 @@ class AblationStudyTests(unittest.TestCase):
                 ablation / "page_blue_ink_extraction.txt": "甲乙",
                 ablation / "page_line_removal.txt": "甲乙丙",
                 ensemble / "page_merged_ocr.txt": "甲乙丙",
+                llm / "page_rule_based.txt": "甲乙丙",
                 llm / "page_corrected.txt": "甲乙丙",
             }
             for path, text in predictions.items():
@@ -49,12 +50,17 @@ class AblationStudyTests(unittest.TestCase):
                 -1 / 3,
             )
             self.assertEqual(aggregate["llm_correction"]["cer"], 0)
+            self.assertEqual(aggregate["llm_correction"]["delta_cer_vs_parent"], 0)
 
             paths = save_report(report, root / "reports")
             self.assertTrue(all(path.is_file() for path in paths))
             markdown = paths[2].read_text(encoding="utf-8")
-            self.assertIn("| Setting | CER ↓ | Accuracy ↑ | Δ CER vs baseline | 說明 |", markdown)
+            self.assertIn(
+                "| Setting | CER ↓ | Accuracy ↑ | Δ CER vs baseline | Δ CER vs parent | 說明 |",
+                markdown,
+            )
             self.assertIn("+ multi-variant ensemble", markdown)
+            self.assertIn("+ rule-based normalization", markdown)
 
     def test_rejects_empty_ground_truth(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

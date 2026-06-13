@@ -17,7 +17,8 @@ the normal pipeline outputs.
 | + blue ink extraction | generated after evaluation | 看藍筆萃取是否有效 |
 | + line removal | generated after evaluation | 看去橫線是否有效 |
 | + multi-variant ensemble | generated after evaluation | 看 ensemble 是否有效 |
-| + LLM correction | generated after evaluation | 完整 correction stage（rule-based normalization + grounded LLM） |
+| + rule-based normalization | generated after evaluation | 只套用 deterministic normalization |
+| + LLM correction | generated after evaluation | 在 rule-based normalization 後加入 grounded LLM |
 
 Run the full experiment:
 
@@ -42,6 +43,6 @@ preprocessing but are not active OCR sources in the current default ensemble.
 They are therefore excluded from the main contribution table; they cannot explain
 the current ensemble result.
 
-The final row measures the complete correction-stage contribution. Because
-rule-based normalization is mandatory before the grounded LLM call, it does not
-claim to isolate the LLM from rule-based normalization.
+The final two rows isolate the correction-stage contribution. Their parent
+comparison is `ensemble -> rule-based normalization -> grounded LLM`, so the final
+row reports the incremental LLM effect after deterministic normalization.

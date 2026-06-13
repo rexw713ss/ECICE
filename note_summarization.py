@@ -65,9 +65,15 @@ def extract_named_sections(text, names):
     matches = []
     longest_first = sorted(names, key=len, reverse=True)
     for index, line in enumerate(lines):
-        label = re.sub(r"^\s*#{1,6}\s*", "", line).strip().strip("*_ ")
+        heading = re.match(r"^\s*#{1,6}\s+(.+?)\s*$", line)
+        if heading:
+            label = heading.group(1).strip().strip("*_ ")
+        else:
+            label = line.strip().strip("*_ ").rstrip("：:")
+            if label not in longest_first:
+                continue
         for name in longest_first:
-            if name in label:
+            if label == name or (heading and name in label):
                 matches.append((index, name))
                 break
 

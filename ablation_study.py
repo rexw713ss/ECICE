@@ -22,18 +22,21 @@ from pipeline_paths import (
 SINGLE_VARIANT_SETTINGS = (
     {
         "id": "document_rectification",
+        "parent_id": "raw_paddleocr",
         "variant": "document",
         "label": "+ document rectification",
         "description": "只加文件矯正，使用單一 document variant",
     },
     {
         "id": "blue_ink_extraction",
+        "parent_id": "raw_paddleocr",
         "variant": "blue_ink",
         "label": "+ blue ink extraction",
         "description": "單一 blue-ink variant（含上游矯正、光照正規化與銳化）",
     },
     {
         "id": "line_removal",
+        "parent_id": "raw_paddleocr",
         "variant": "line_removed",
         "label": "+ line removal",
         "description": "單一 line-removed variant（含上游矯正、光照正規化與銳化）",
@@ -43,19 +46,28 @@ SINGLE_VARIANT_SETTINGS = (
 ABLATION_SETTINGS = (
     {
         "id": "raw_paddleocr",
+        "parent_id": None,
         "label": "Raw image + PaddleOCR",
         "description": "baseline",
     },
     *SINGLE_VARIANT_SETTINGS,
     {
         "id": "multi_variant_ensemble",
+        "parent_id": "raw_paddleocr",
         "label": "+ multi-variant ensemble",
         "description": "看 ensemble 是否有效",
     },
     {
+        "id": "rule_based_normalization",
+        "parent_id": "multi_variant_ensemble",
+        "label": "+ rule-based normalization",
+        "description": "只套用繁簡轉換、Unicode NFC、標點空白與 OCR 噪聲規則",
+    },
+    {
         "id": "llm_correction",
+        "parent_id": "rule_based_normalization",
         "label": "+ LLM correction",
-        "description": "完整 correction stage（rule-based normalization + grounded LLM）",
+        "description": "在 rule-based normalization 後加入 grounded LLM",
     },
 )
 
@@ -170,6 +182,7 @@ def prediction_paths(stem, baseline_dir, ablation_dir, ensemble_dir, llm_dir):
         "blue_ink_extraction": Path(ablation_dir) / f"{stem}_blue_ink_extraction.txt",
         "line_removal": Path(ablation_dir) / f"{stem}_line_removal.txt",
         "multi_variant_ensemble": Path(ensemble_dir) / f"{stem}_merged_ocr.txt",
+        "rule_based_normalization": Path(llm_dir) / f"{stem}_rule_based.txt",
         "llm_correction": Path(llm_dir) / f"{stem}_corrected.txt",
     }
 
@@ -257,6 +270,17 @@ def evaluate_ablation(
                 if result["cer"] is not None and baseline_cer is not None
                 else None
             )
+            parent_id = setting.get("parent_id")
+            parent_cer = (
+                aggregate[profile].get(parent_id, {}).get("cer")
+                if parent_id
+                else None
+            )
+            result["delta_cer_vs_parent"] = (
+                result["cer"] - parent_cer
+                if result["cer"] is not None and parent_cer is not None
+                else None
+            )
             aggregate[profile][setting_id] = result
 
     return {
@@ -286,8 +310,8 @@ def write_markdown(report, path):
             [
                 f"## {profile.replace('_', ' ').title()}",
                 "",
-                "| Setting | CER ↓ | Accuracy ↑ | Δ CER vs baseline | 說明 |",
-                "|---|---:|---:|---:|---|",
+                "| Setting | CER ↓ | Accuracy ↑ | Δ CER vs baseline | Δ CER vs parent | 說明 |",
+                "|---|---:|---:|---:|---:|---|",
             ]
         )
         for setting in report["settings"]:
@@ -296,6 +320,7 @@ def write_markdown(report, path):
                 f"| {setting['label']} | {format_percent(result['cer'])} | "
                 f"{format_percent(result['character_accuracy'])} | "
                 f"{format_percent(result['delta_cer_vs_baseline'])} | "
+                f"{format_percent(result['delta_cer_vs_parent'])} | "
                 f"{setting['description']} |"
             )
         lines.append("")
@@ -312,6 +337,7 @@ def write_csv(report, path):
         "character_accuracy",
         "character_accuracy_percent",
         "delta_cer_vs_baseline",
+        "delta_cer_vs_parent",
         "description",
     ]
     with path.open("w", encoding="utf-8-sig", newline="") as file:
@@ -336,6 +362,7 @@ def write_csv(report, path):
                             else None
                         ),
                         "delta_cer_vs_baseline": result["delta_cer_vs_baseline"],
+                        "delta_cer_vs_parent": result["delta_cer_vs_parent"],
                         "description": setting["description"],
                     }
                 )

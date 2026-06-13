@@ -84,6 +84,34 @@ def build_short_answer_messages(summary, question_count):
     ]
 
 
+def build_quiz_repair_messages(summary, missing_sections, question_count):
+    section_list = "、".join(missing_sections)
+    requirements = []
+    if "簡答題" in missing_sections:
+        requirements.append(f"簡答題恰好 {question_count} 題")
+    if "簡答題答案與解析" in missing_sections:
+        requirements.append("簡答題答案與解析必須逐題對應並列出得分關鍵字")
+    if "單選題" in missing_sections:
+        requirements.append(f"單選題恰好 {question_count} 題，每題四個選項 A-D")
+    if "是非題" in missing_sections:
+        requirements.append(f"是非題恰好 {question_count} 題")
+    return [
+        {
+            "role": "system",
+            "content": (
+                "你是繁體中文課堂小考命題教師。"
+                "上一個輸出缺少必要章節，請只重新輸出指定的三級標題與內容。"
+                "只能根據摘要命題，不得使用外部知識，不得輸出前言、總標題、"
+                "二級標題、emoji 或 code fence。"
+                f"必須完整輸出：{section_list}。"
+                + "；".join(requirements)
+                + "。"
+            ),
+        },
+        {"role": "user", "content": f"單頁筆記摘要：\n{summary}"},
+    ]
+
+
 def normalize_quiz_fragment(fragment, section_names):
     aliases = []
     alias_to_name = {}
@@ -215,6 +243,40 @@ def generate_quiz(
         short_answer,
         ("簡答題", "簡答題答案與解析"),
     )
+    missing_objective = [
+        name
+        for name in ("單選題", "是非題", "單選題答案與解析", "是非題答案與解析")
+        if not objective_parts.get(name)
+    ]
+    if missing_objective:
+        print("Repairing missing objective quiz sections...")
+        repaired = chat_completion(
+            build_quiz_repair_messages(quiz_source, missing_objective, question_count),
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout=timeout,
+        )
+        objective_parts.update(normalize_quiz_fragment(repaired, missing_objective))
+
+    missing_short = [
+        name
+        for name in ("簡答題", "簡答題答案與解析")
+        if not short_parts.get(name)
+    ]
+    if missing_short:
+        print("Repairing missing short-answer quiz sections...")
+        repaired = chat_completion(
+            build_quiz_repair_messages(quiz_source, missing_short, question_count),
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout=timeout,
+        )
+        short_parts.update(normalize_quiz_fragment(repaired, missing_short))
+
     missing = [
         name
         for name in ALL_QUIZ_SECTIONS
